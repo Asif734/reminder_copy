@@ -505,12 +505,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("desktop runtime failed");
     app.run(|app, event| {
+        #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }
+
+        #[cfg(target_os = "macos")]
+        let _ = (app, event);
     });
 }
 
