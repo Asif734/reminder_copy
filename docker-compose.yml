@@ -40,7 +40,7 @@ services:
       api-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/login"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/dashboard"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -81,32 +81,6 @@ services:
       timeout: 3s
       retries: 10
 
-  auth-service:
-    <<: *api-common
-    build:
-      context: .
-      dockerfile: services/auth-service/Dockerfile
-    environment:
-      <<: *common-environment
-      SERVICE_NAME: auth-service
-      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@example.com}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-replace-with-a-strong-password}
-      INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-System Administrator}
-    ports:
-      - "${AUTH_SERVICE_PORT:-8001}:8000"
-    command: ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
-
-  user-service:
-    <<: *api-common
-    build:
-      context: .
-      dockerfile: services/user-service/Dockerfile
-    environment:
-      <<: *common-environment
-      SERVICE_NAME: user-service
-    ports:
-      - "${USER_SERVICE_PORT:-8002}:8000"
-
   reminder-service:
     <<: *api-common
     build:
@@ -127,8 +101,6 @@ services:
     environment:
       <<: *common-environment
       SERVICE_NAME: api-gateway
-      AUTH_SERVICE_URL: http://auth-service:8000
-      USER_SERVICE_URL: http://user-service:8000
       REMINDER_SERVICE_URL: http://reminder-service:8000
     ports:
       - "${API_GATEWAY_PORT:-8000}:8000"
@@ -137,61 +109,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      auth-service:
-        condition: service_healthy
-      user-service:
-        condition: service_healthy
       reminder-service:
         condition: service_healthy
-
-  scheduler-worker:
-    restart: unless-stopped
-    build:
-      context: .
-      dockerfile: services/scheduler-service/Dockerfile
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      <<: *common-environment
-      SERVICE_NAME: scheduler-service
-    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO"]
-    networks: [backend]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping -d celery@$${HOSTNAME} --timeout 3 | grep -q pong"]
-      interval: 15s
-      timeout: 8s
-      retries: 5
-      start_period: 15s
-
-  scheduler-beat:
-    restart: unless-stopped
-    build:
-      context: .
-      dockerfile: services/scheduler-service/Dockerfile
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      <<: *common-environment
-      SERVICE_NAME: scheduler-service
-    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
-    networks: [backend]
-    depends_on:
-      redis:
-        condition: service_healthy
-      scheduler-worker:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
-      interval: 15s
-      timeout: 3s
-      retries: 3
 
 networks:
   backend:

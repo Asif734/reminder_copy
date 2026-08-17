@@ -17,11 +17,7 @@ async def api_root() -> dict[str, str]:
 )
 async def proxy(path: str, request: Request) -> Response:
     settings = request.app.state.settings
-    service_url = (
-        settings.reminder_service_url
-        if path.startswith(("reminders", "reminder-occurrences", "me/reminders", "reports"))
-        else settings.auth_service_url
-    )
+    service_url = settings.reminder_service_url
     headers = {
         key: value
         for key, value in request.headers.items()

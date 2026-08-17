@@ -1,13 +1,11 @@
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { BellRing, Check, Clock3 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { native } from "./native";
 import type { Occurrence } from "./types";
-import type { Session } from "./types";
 
-type ReminderDelivery = { occurrence: Occurrence; session: Session };
+type ReminderDelivery = { occurrence: Occurrence };
 
 export function ReminderPopup() {
   const [queue, setQueue] = useState<ReminderDelivery[]>([]);
@@ -24,13 +22,8 @@ export function ReminderPopup() {
       );
       setError("");
     });
-    const unlistenLogout = listen("logged-out", () => {
-      setQueue([]);
-      getCurrentWindow().hide();
-    });
     return () => {
       unlisten.then((removeListener) => removeListener());
-      unlistenLogout.then((removeListener) => removeListener());
     };
   }, []);
 
@@ -40,9 +33,9 @@ export function ReminderPopup() {
     setError("");
     try {
       if (action === "complete") {
-        await native.complete(current.occurrence.id, current.session);
+        await native.complete(current.occurrence.id);
       } else {
-        await native.snooze(current.occurrence.id, 10, current.session);
+        await native.snooze(current.occurrence.id, 10);
       }
       const remaining = queue.slice(1);
       if (remaining.length === 0) await native.dismissPopup();

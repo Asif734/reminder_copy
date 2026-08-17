@@ -1,31 +1,30 @@
 # Reminder Desktop
 
-Tauri 2 member client with a React UI and Rust-owned SQLite cache/outbox.
+Tauri 2 broadcast reminder client with a React UI and Rust-owned SQLite database.
 
 ## Features
 
-- Member login with session data stored in the operating-system credential store
-- Startup, login, two-minute periodic, reconnect, and manual synchronization
-- SQLite occurrence cache and retryable local action outbox
-- Offline due detection and native notifications
+- No-login manual synchronization of global recurring definitions
+- SQLite definition and occurrence storage with local completion and snooze state
+- Offline daily/monthly occurrence generation and native notifications
 - Today, upcoming, overdue, and completed sections
 - One-click completion and 10/30/60/120-minute snooze
 - Official Tauri notification and autostart plugins
-- System tray with Open Reminders, Sync Now, Logout, and Exit
+- System tray with Open Reminders, Sync Now, and Exit
 - Closing the window hides it; only Exit terminates the process
 - Autostart launches with a minimized argument
+
+After a successful **Update reminders**, the server may go offline. The desktop runtime uses
+the downloaded definitions and the computer's local timezone to create future daily and
+monthly occurrences. Changes, disabled reminders, and deletions take effect on that computer
+the next time the installation updates successfully.
 
 ## Development
 
 Install Rust using `rustup`, plus the platform prerequisites from the Tauri 2 documentation.
 
-Copy the desktop environment file and set the backend URL before running or packaging:
-
-```bash
-cp .env.example .env
-```
-
-Both values should point to the same API gateway. Use an HTTPS address for production builds.
+The server address is entered in the app when **Update reminders** is selected and is remembered
+on that installation. Entering a bare IPv4 address automatically uses HTTP port 8000.
 
 ```bash
 npm ci
@@ -35,5 +34,4 @@ npm run tauri dev
 ```
 
 Windows packaging should be performed on a Windows CI runner. macOS packaging requires an
-Apple signing identity for distributable builds. Backend addresses are supplied through
-`VITE_API_BASE_URL` and `DESKTOP_API_BASE_URL` in the desktop `.env` file.
+Apple signing identity for distributable builds.
