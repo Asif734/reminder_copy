@@ -66,7 +66,7 @@ struct ReminderDelivery {
 }
 struct Db(Mutex<Connection>);
 fn migrate(c: &Connection) -> rusqlite::Result<()> {
-    c.execute_batch("CREATE TABLE IF NOT EXISTS occurrences(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL,notified_trigger TEXT);CREATE TABLE IF NOT EXISTS reminder_definitions(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,kind TEXT NOT NULL,occurrence_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS personal_reminders(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS occurrences(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL,notified_trigger TEXT);CREATE TABLE IF NOT EXISTS reminder_definitions(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,kind TEXT NOT NULL,occurrence_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
     let _ = c.execute(
         "ALTER TABLE occurrences ADD COLUMN notified_trigger TEXT",
         [],
@@ -91,8 +91,9 @@ fn replace_definitions(c: &Connection, items: &[ReminderDefinition]) -> Result<(
             .filter_map(Result::ok)
             .filter_map(|(id, payload)| {
                 let occurrence = serde_json::from_str::<Occurrence>(&payload).ok()?;
-                (!active_ids.contains(occurrence.reminder_id.as_str())
-                    || occurrence.status == "PENDING")
+                (!occurrence.reminder_id.starts_with("local:")
+                    && (!active_ids.contains(occurrence.reminder_id.as_str())
+                        || occurrence.status == "PENDING"))
                     .then_some(id)
             })
             .collect::<Vec<_>>();
@@ -127,6 +128,7 @@ fn replace_definitions(c: &Connection, items: &[ReminderDefinition]) -> Result<(
 fn parse_time(value: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(value, "%H:%M:%S")
         .or_else(|_| NaiveTime::parse_from_str(value, "%H:%M:%S%.f"))
+        .or_else(|_| NaiveTime::parse_from_str(value, "%H:%M"))
         .ok()
 }
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -189,7 +191,7 @@ fn materialize_local(c: &Connection) -> Result<(), String> {
 }
 fn materialize_local_on(c: &Connection, today: NaiveDate) -> Result<(), String> {
     let mut statement = c
-        .prepare("SELECT payload FROM reminder_definitions")
+        .prepare("SELECT payload FROM reminder_definitions UNION ALL SELECT payload FROM personal_reminders")
         .map_err(|error| error.to_string())?;
     let definitions = statement
         .query_map([], |row| row.get::<_, String>(0))
@@ -335,6 +337,151 @@ fn start_notification_scheduler(app: tauri::AppHandle) {
         }
     });
 }
+fn personal_definitions(c: &Connection) -> Result<Vec<ReminderDefinition>, String> {
+    let mut statement = c
+        .prepare("SELECT payload FROM personal_reminders ORDER BY updated_at DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    rows.map(|row| {
+        let payload = row.map_err(|e| e.to_string())?;
+        serde_json::from_str(&payload).map_err(|e| e.to_string())
+    })
+    .collect()
+}
+
+fn save_personal(
+    c: &Connection,
+    mut item: ReminderDefinition,
+    creating: bool,
+) -> Result<(), String> {
+    item.title = item.title.trim().to_string();
+    if item.title.is_empty() || item.title.chars().count() > 200 {
+        return Err("Title must contain 1–200 characters".into());
+    }
+    if item
+        .description
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 5000)
+    {
+        return Err("Description must contain at most 5000 characters".into());
+    }
+    if !["DAILY", "MONTHLY"].contains(&item.kind.as_str())
+        || !["LOW", "NORMAL", "HIGH"].contains(&item.priority.as_str())
+        || parse_time(&item.reminder_time).is_none()
+        || !(0..=31).contains(&item.days_before)
+        || (item.kind == "MONTHLY"
+            && !item
+                .monthly_due_day
+                .is_some_and(|day| (1..=31).contains(&day)))
+        || (item.kind == "MONTHLY" && item.secondary_reminder_time.is_some())
+        || (item.kind == "DAILY" && item.monthly_due_day.is_some())
+    {
+        return Err("Invalid reminder schedule".into());
+    }
+    if let Some(secondary) = &item.secondary_reminder_time {
+        if parse_time(secondary).is_none()
+            || parse_time(secondary) == parse_time(&item.reminder_time)
+        {
+            return Err("Choose a different, valid second time".into());
+        }
+    }
+    let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+    if creating {
+        // SQLite supplies a random identifier, independently of connectivity.
+        item.id = tx
+            .query_row("SELECT 'local:' || lower(hex(randomblob(16)))", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+    } else {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM personal_reminders WHERE id=?1)",
+                [&item.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err("Personal reminder not found".into());
+        }
+    }
+    item.updated_at = Utc::now().to_rfc3339();
+    tx.execute("INSERT INTO personal_reminders(id,payload,updated_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at", params![item.id, serde_json::to_string(&item).map_err(|e| e.to_string())?, item.updated_at]).map_err(|e| e.to_string())?;
+    // Preserve completed history while replacing pending schedules after edits.
+    tx.execute("DELETE FROM occurrences WHERE json_extract(payload,'$.reminder_id')=?1 AND json_extract(payload,'$.status')!='COMPLETED'", [&item.id]).map_err(|e| e.to_string())?;
+    materialize_local(&tx)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn delete_personal(c: &Connection, id: &str) -> Result<(), String> {
+    let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+    if tx
+        .execute("DELETE FROM personal_reminders WHERE id=?1", [id])
+        .map_err(|e| e.to_string())?
+        == 0
+    {
+        return Err("Personal reminder not found".into());
+    }
+    tx.execute(
+        "DELETE FROM occurrences WHERE json_extract(payload,'$.reminder_id')=?1",
+        [id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_personal_reminders(db: State<Db>) -> Result<Vec<ReminderDefinition>, String> {
+    personal_definitions(&*db.0.lock().map_err(|e| e.to_string())?)
+}
+#[tauri::command]
+fn save_personal_reminder(
+    item: ReminderDefinition,
+    creating: bool,
+    db: State<Db>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    save_personal(&*db.0.lock().map_err(|e| e.to_string())?, item, creating)?;
+    app.emit("cache-updated", ()).map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn delete_personal_reminder(
+    id: String,
+    db: State<Db>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    delete_personal(&*db.0.lock().map_err(|e| e.to_string())?, &id)?;
+    app.emit("cache-updated", ()).map_err(|e| e.to_string())
+}
+
+fn snooze_until(
+    item: &Occurrence,
+    now: chrono::DateTime<Local>,
+    minutes: i32,
+) -> Result<String, String> {
+    if item.kind == "MONTHLY" {
+        let scheduled = chrono::DateTime::parse_from_rfc3339(&item.scheduled_at)
+            .map_err(|e| e.to_string())?
+            .with_timezone(&Local);
+        let tomorrow = now.date_naive().succ_opt().ok_or("Invalid next day")?;
+        // During a DST gap, move forward to the first valid local minute.
+        let mut target = tomorrow.and_time(scheduled.time());
+        for _ in 0..180 {
+            if let Some(until) = Local.from_local_datetime(&target).earliest() {
+                return Ok(until.to_rfc3339());
+            }
+            target += chrono::Duration::minutes(1);
+        }
+        return Err("Tomorrow's reminder time is invalid".into());
+    }
+    if ![10, 30, 60, 120].contains(&minutes) {
+        return Err("Unsupported snooze duration".into());
+    }
+    Ok((now + chrono::Duration::minutes(minutes.into())).to_rfc3339())
+}
+
 #[tauri::command]
 fn list_cached(db: State<Db>) -> Result<Vec<Occurrence>, String> {
     let c = db.0.lock().unwrap();
@@ -415,10 +562,19 @@ async fn snooze_occurrence(
     db: State<'_, Db>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if ![10, 30, 60, 120].contains(&minutes) {
-        return Err("Unsupported snooze duration".to_string());
-    }
-    let until = (Utc::now() + chrono::Duration::minutes(minutes.into())).to_rfc3339();
+    let until = {
+        let c = db.0.lock().map_err(|e| e.to_string())?;
+        let payload: String = c
+            .query_row("SELECT payload FROM occurrences WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let item: Occurrence = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+        if item.status == "COMPLETED" {
+            return Err("This reminder is already completed".into());
+        }
+        snooze_until(&item, Local::now(), minutes)?
+    };
     update_local_status(db.inner(), &id, "SNOOZED", Some(until), None)?;
     app.emit("cache-updated", ())
         .map_err(|error| error.to_string())
@@ -494,6 +650,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            list_personal_reminders,
+            save_personal_reminder,
+            delete_personal_reminder,
             list_cached,
             sync_now,
             complete_occurrence,
@@ -521,6 +680,124 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn personal_fixture(kind: &str) -> ReminderDefinition {
+        ReminderDefinition {
+            id: String::new(),
+            title: "Personal reminder".into(),
+            description: None,
+            kind: kind.into(),
+            reminder_time: "09:00".into(),
+            secondary_reminder_time: None,
+            monthly_due_day: if kind == "MONTHLY" { Some(1) } else { None },
+            days_before: 0,
+            priority: "NORMAL".into(),
+            is_active: true,
+            updated_at: String::new(),
+        }
+    }
+
+    fn occurrence_for(c: &Connection, id: &str) -> Occurrence {
+        let payload: String = c.query_row(
+            "SELECT payload FROM occurrences WHERE json_extract(payload,'$.reminder_id')=?1 LIMIT 1",
+            [id], |r| r.get(0),
+        ).unwrap();
+        serde_json::from_str(&payload).unwrap()
+    }
+
+    #[test]
+    fn personal_crud_survives_server_sync_and_preserves_completed_history() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        save_personal(&c, personal_fixture("DAILY"), true).unwrap();
+        let mut item = personal_definitions(&c).unwrap().remove(0);
+        assert!(item.id.starts_with("local:"));
+        let occurrence = occurrence_for(&c, &item.id);
+        replace_definitions(&c, &[]).unwrap();
+        assert_eq!(occurrence_for(&c, &item.id).id, occurrence.id);
+        assert_eq!(personal_definitions(&c).unwrap().len(), 1);
+
+        item.title = "Changed title".into();
+        save_personal(&c, item.clone(), false).unwrap();
+        assert_eq!(occurrence_for(&c, &item.id).title, "Changed title");
+        let db = Db(Mutex::new(c));
+        update_local_status(
+            &db,
+            &occurrence.id,
+            "COMPLETED",
+            None,
+            Some(Utc::now().to_rfc3339()),
+        )
+        .unwrap();
+        let c = db.0.lock().unwrap();
+        item.title = "Changed again".into();
+        save_personal(&c, item.clone(), false).unwrap();
+        assert_eq!(occurrence_for(&c, &item.id).status, "COMPLETED");
+        delete_personal(&c, &item.id).unwrap();
+        assert!(personal_definitions(&c).unwrap().is_empty());
+        let count: i64 = c
+            .query_row("SELECT count(*) FROM occurrences", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(delete_personal(&c, "server-id").is_err());
+    }
+
+    #[test]
+    fn personal_monthly_pause_resume_and_validation() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        save_personal(&c, personal_fixture("MONTHLY"), true).unwrap();
+        let mut item = personal_definitions(&c).unwrap().remove(0);
+        assert_eq!(occurrence_for(&c, &item.id).kind, "MONTHLY");
+        item.is_active = false;
+        save_personal(&c, item.clone(), false).unwrap();
+        let count: i64 = c
+            .query_row("SELECT count(*) FROM occurrences", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        item.is_active = true;
+        save_personal(&c, item.clone(), false).unwrap();
+        assert_eq!(occurrence_for(&c, &item.id).kind, "MONTHLY");
+        item.monthly_due_day = Some(32);
+        assert!(save_personal(&c, item.clone(), false).is_err());
+        item.monthly_due_day = Some(1);
+        item.id = "server-id".into();
+        assert!(save_personal(&c, item, false).is_err());
+        let mut daily = personal_fixture("DAILY");
+        daily.secondary_reminder_time = Some("09:00:00".into());
+        assert!(save_personal(&c, daily, true).is_err());
+    }
+
+    #[test]
+    fn monthly_snooze_is_tomorrow_at_scheduled_time_and_daily_is_ten_minutes() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        save_personal(&c, personal_fixture("MONTHLY"), true).unwrap();
+        let item = personal_definitions(&c).unwrap().remove(0);
+        let mut occurrence = occurrence_for(&c, &item.id);
+        let now = Local
+            .with_ymd_and_hms(2026, 12, 31, 15, 30, 0)
+            .earliest()
+            .unwrap();
+        let until =
+            chrono::DateTime::parse_from_rfc3339(&snooze_until(&occurrence, now, 10).unwrap())
+                .unwrap()
+                .with_timezone(&Local);
+        assert_eq!(
+            until.date_naive(),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
+        );
+        assert_eq!(until.time(), NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        occurrence.kind = "DAILY".into();
+        let until =
+            chrono::DateTime::parse_from_rfc3339(&snooze_until(&occurrence, now, 10).unwrap())
+                .unwrap();
+        assert_eq!(
+            until.with_timezone(&Utc),
+            (now + chrono::Duration::minutes(10)).with_timezone(&Utc)
+        );
+        assert!(snooze_until(&occurrence, now, 15).is_err());
+    }
+
     #[test]
     fn migrations_are_idempotent() {
         let c = Connection::open_in_memory().unwrap();

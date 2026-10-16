@@ -38,3 +38,17 @@ changed definition cannot learn about it until its next successful update.
 There is intentionally no application-level authorization. The deployment must therefore be
 treated as trusted-network software. Restrict ports `3000` and `8000` to the intended LAN or a
 private VPN; exposing them publicly would allow anyone to read and modify global reminders.
+
+## Personal desktop reminders
+
+Each installation can also create, read, update, pause, and delete its own daily
+and monthly definitions completely offline. These are stored separately in the
+SQLite `personal_reminders` table with `local:` identifiers. The native scheduler
+reads both personal and downloaded definitions. Server synchronization replaces
+only downloaded definitions and their applicable occurrences; personal definitions
+and their completion/snooze state remain on that installation.
+
+Personal edits replace unfinished occurrences while preserving completed history.
+Deletion removes the personal definition and its occurrence history atomically.
+Monthly snooze targets the next local calendar day at the original scheduled time;
+daily snooze retains the selected minute duration.

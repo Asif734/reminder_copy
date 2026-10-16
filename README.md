@@ -26,6 +26,10 @@ port `8000`. Swagger is available at `http://localhost:8000/docs` outside produc
 Public reminder management is available at `/api/v1/reminders`. Daily and monthly definitions
 apply to all installations. There are no accounts, member assignments, or login tokens. Each
 desktop stores definitions in SQLite and keeps its own completion and snooze state.
+Users can also create, edit, pause, and delete personal daily/monthly reminders entirely
+offline in the desktop app. These remain private to that computer and survive server updates.
+Monthly **Remind me later** postpones until tomorrow at the scheduled local time; daily
+reminders snooze for 10 minutes.
 
 The no-login admin dashboard is available at `http://localhost:3000`. It contains the global
 reminder dashboard and reminder management. Run its standalone checks with:

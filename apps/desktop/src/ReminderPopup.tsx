@@ -22,10 +22,23 @@ export function ReminderPopup() {
       );
       setError("");
     });
+    const unlistenCache = listen("cache-updated", async () => {
+      const cached = await native.cached();
+      setQueue((items) => items.flatMap(({ occurrence }) => {
+        const updated = cached.find((item) => item.id === occurrence.id);
+        if (!updated || updated.status === "COMPLETED" || new Date(updated.snoozed_until ?? updated.scheduled_at) > new Date()) return [];
+        return [{ occurrence: updated }];
+      }));
+    });
     return () => {
+      unlistenCache.then((removeListener) => removeListener());
       unlisten.then((removeListener) => removeListener());
     };
   }, []);
+
+  useEffect(() => {
+    if (queue.length === 0) void native.dismissPopup().catch(() => {});
+  }, [queue.length]);
 
   async function act(action: "complete" | "later") {
     if (!current || busy) return;
@@ -67,7 +80,7 @@ export function ReminderPopup() {
         <div className="popup-actions">
           <button disabled={busy} className="btn popup-later" onClick={() => act("later")}>
             <Clock3 size={20} /> Remind me later
-            <small>10 minutes</small>
+            <small>{current.occurrence.type === "MONTHLY" ? "Tomorrow at the scheduled time" : "10 minutes"}</small>
           </button>
           <button disabled={busy} className="btn popup-done" onClick={() => act("complete")}>
             <Check size={21} /> Completed

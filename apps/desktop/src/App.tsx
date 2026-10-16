@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BellRing, Check, CloudOff, RefreshCw, Timer } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 
+import { PersonalReminders } from "./PersonalReminders";
 import { native } from "./native";
 import { sections } from "./schedule";
 import type { Occurrence } from "./types";
@@ -70,6 +71,7 @@ export default function App() {
       </header>
       <div className="p-6 max-w-5xl mx-auto space-y-8">
         {updateMessage && <p role="status" className={`card p-4 text-sm ${serverAvailable ? "text-emerald-700" : "text-red-700"}`}>{updateMessage}</p>}
+        <PersonalReminders />
         <ReminderSection title="Today" items={grouped.today} act={act} />
         <ReminderSection title="Overdue" items={grouped.overdue} act={act} />
         <ReminderSection title="Upcoming" items={grouped.upcoming} act={act} />
@@ -81,5 +83,5 @@ export default function App() {
 }
 
 function ReminderSection({ title, items, act }: { title: string; items: Occurrence[]; act: (kind: "complete" | "snooze", id: string, minutes?: number) => Promise<void> }) {
-  return <section><h2 className="font-bold text-lg mb-3">{title}<span className="ml-2 text-xs bg-slate-200 px-2 py-1 rounded-full">{items.length}</span></h2>{items.length === 0 ? <div className="card p-6 muted text-sm">Nothing here.</div> : <div className="grid gap-3">{items.map((item) => <article key={item.id} className="card p-5 flex gap-5 justify-between items-start"><div><div className="flex gap-2 items-center"><h3 className="font-bold">{item.title}</h3><span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-1 rounded">{item.type}</span></div><p className="muted text-sm mt-2">{item.description}</p><p className="text-xs mt-3">{new Date(item.scheduled_at).toLocaleString()} · {item.status}</p></div>{item.status !== "COMPLETED" && <div className="flex gap-2 shrink-0"><button className="btn secondary flex gap-2" onClick={() => act("snooze", item.id, 10)}><Timer size={17} />Remind me later</button><button className="btn primary flex gap-2" onClick={() => act("complete", item.id)}><Check size={17} />Done</button></div>}</article>)}</div>}</section>;
+  return <section><h2 className="font-bold text-lg mb-3">{title}<span className="ml-2 text-xs bg-slate-200 px-2 py-1 rounded-full">{items.length}</span></h2>{items.length === 0 ? <div className="card p-6 muted text-sm">Nothing here.</div> : <div className="grid gap-3">{items.map((item) => <article key={item.id} className="card p-5 flex gap-5 justify-between items-start"><div><div className="flex gap-2 items-center"><h3 className="font-bold">{item.title}</h3><span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-1 rounded">{item.type}</span></div><p className="muted text-sm mt-2">{item.description}</p><p className="text-xs mt-3">{item.reminder_id.startsWith("local:") ? "Personal" : "Shared"} · {new Date(item.scheduled_at).toLocaleString()} · {item.status}</p></div>{item.status !== "COMPLETED" && <div className="flex gap-2 shrink-0"><button className="btn secondary flex gap-2" onClick={() => act("snooze", item.id, 10)}><Timer size={17} />{item.type === "MONTHLY" ? "Remind tomorrow" : "Remind in 10 minutes"}</button><button className="btn primary flex gap-2" onClick={() => act("complete", item.id)}><Check size={17} />Done</button></div>}</article>)}</div>}</section>;
 }

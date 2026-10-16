@@ -35,3 +35,42 @@ npm run tauri dev
 
 Windows packaging should be performed on a Windows CI runner. macOS packaging requires an
 Apple signing identity for distributable builds.
+
+## Personal offline reminders
+
+Use **My reminders → Add reminder** to create a daily or monthly reminder without
+connecting to a server. Personal reminders can be edited, paused, resumed, and
+deleted on the same computer. They live in SQLite and survive app restarts and
+server updates; they are never uploaded or distributed to other installations.
+Downloaded global reminders remain managed through the admin dashboard.
+
+Daily reminders support an optional second time. Monthly reminders support a due
+day (clamped to the last day in shorter months) and a lead time in days. Editing a
+personal reminder replaces its pending occurrences and keeps completed history.
+Deleting it removes its local history as well.
+
+**Remind me later** postpones monthly reminders until tomorrow at their originally
+scheduled local time, including across month/year boundaries. Daily reminders
+continue to snooze for 10 minutes. Both the popup and main window use this rule.
+
+## Build and run on macOS
+
+With Node.js, npm, Rust/Cargo, and the Xcode command line tools installed:
+
+```bash
+cd apps/desktop
+npm ci
+npm test
+npm run tauri build
+```
+
+The packaged app is `src-tauri/target/release/bundle/macos/Reminder.app`.
+The disk image installer is written to `src-tauri/target/release/bundle/dmg/`.
+Open the disk image and drag **Reminder** into Applications, then launch it.
+Use **My reminders → Add reminder** to start without any backend or internet.
+Allow notifications if macOS asks. Closing the main window keeps reminders running;
+use the system tray's **Exit** action to stop the app.
+
+For development, run `npm run tauri dev` instead of the build command.
+Python's `.venv` is used by the optional backend, while desktop JavaScript dependencies
+are installed locally in `node_modules` by `npm ci`.
