@@ -51,6 +51,7 @@ struct ReminderDefinition {
     reminder_time: String,
     secondary_reminder_time: Option<String>,
     monthly_due_day: Option<u32>,
+    due_date: Option<String>,
     days_before: i64,
     priority: String,
     is_active: bool,
@@ -236,6 +237,25 @@ fn materialize_local_on(c: &Connection, today: NaiveDate) -> Result<(), String> 
                     due_day,
                 )?;
             }
+        } else if definition.kind == "DATE" {
+            let Some(due_day) = definition
+                .due_date
+                .as_deref()
+                .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+            else {
+                continue;
+            };
+            let start_day = due_day - chrono::Duration::days(definition.days_before);
+            if today >= start_day {
+                add_local_occurrence(
+                    c,
+                    definition,
+                    &due_day.to_string(),
+                    start_day,
+                    primary,
+                    due_day,
+                )?;
+            }
         }
     }
     Ok(())
@@ -367,7 +387,11 @@ fn save_personal(
     {
         return Err("Description must contain at most 5000 characters".into());
     }
-    if !["DAILY", "MONTHLY"].contains(&item.kind.as_str())
+    let exact_due_date = item
+        .due_date
+        .as_deref()
+        .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
+    if !["DAILY", "MONTHLY", "DATE"].contains(&item.kind.as_str())
         || !["LOW", "NORMAL", "HIGH"].contains(&item.priority.as_str())
         || parse_time(&item.reminder_time).is_none()
         || !(0..=31).contains(&item.days_before)
@@ -375,10 +399,15 @@ fn save_personal(
             && !item
                 .monthly_due_day
                 .is_some_and(|day| (1..=31).contains(&day)))
-        || (item.kind == "MONTHLY" && item.secondary_reminder_time.is_some())
-        || (item.kind == "DAILY" && item.monthly_due_day.is_some())
+        || (item.kind != "MONTHLY" && item.monthly_due_day.is_some())
+        || (item.kind == "DATE" && exact_due_date.is_none())
+        || (item.kind != "DATE" && item.due_date.is_some())
+        || (item.kind != "DAILY" && item.secondary_reminder_time.is_some())
     {
         return Err("Invalid reminder schedule".into());
+    }
+    if creating && exact_due_date.is_some_and(|day| day < Local::now().date_naive()) {
+        return Err("Due date cannot be in the past".into());
     }
     if let Some(secondary) = &item.secondary_reminder_time {
         if parse_time(secondary).is_none()
@@ -461,7 +490,7 @@ fn snooze_until(
     now: chrono::DateTime<Local>,
     minutes: i32,
 ) -> Result<String, String> {
-    if item.kind == "MONTHLY" {
+    if item.kind == "MONTHLY" || item.kind == "DATE" {
         let scheduled = chrono::DateTime::parse_from_rfc3339(&item.scheduled_at)
             .map_err(|e| e.to_string())?
             .with_timezone(&Local);
@@ -689,6 +718,7 @@ mod tests {
             reminder_time: "09:00".into(),
             secondary_reminder_time: None,
             monthly_due_day: if kind == "MONTHLY" { Some(1) } else { None },
+            due_date: None,
             days_before: 0,
             priority: "NORMAL".into(),
             is_active: true,
@@ -768,7 +798,28 @@ mod tests {
     }
 
     #[test]
-    fn monthly_snooze_is_tomorrow_at_scheduled_time_and_daily_is_ten_minutes() {
+    fn personal_date_wise_reminder_is_saved_and_materialized_locally() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        let mut item = personal_fixture("DATE");
+        let due_day = Local::now().date_naive() + chrono::Duration::days(5);
+        item.due_date = Some(due_day.to_string());
+        item.days_before = 5;
+        save_personal(&c, item, true).unwrap();
+        let saved = personal_definitions(&c).unwrap().remove(0);
+        let due_day_string = due_day.to_string();
+        assert_eq!(saved.kind, "DATE");
+        assert_eq!(saved.due_date.as_deref(), Some(due_day_string.as_str()));
+        let occurrence = occurrence_for(&c, &saved.id);
+        assert_eq!(
+            occurrence.scheduled_date,
+            Local::now().date_naive().to_string()
+        );
+        assert_eq!(occurrence.due_at[..10], due_day.to_string());
+    }
+
+    #[test]
+    fn non_daily_snooze_is_tomorrow_at_scheduled_time_and_daily_is_ten_minutes() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
         save_personal(&c, personal_fixture("MONTHLY"), true).unwrap();
@@ -787,6 +838,16 @@ mod tests {
             NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
         );
         assert_eq!(until.time(), NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        occurrence.kind = "DATE".into();
+        let date_until =
+            chrono::DateTime::parse_from_rfc3339(&snooze_until(&occurrence, now, 10).unwrap())
+                .unwrap()
+                .with_timezone(&Local);
+        assert_eq!(
+            date_until.date_naive(),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
+        );
+        assert_eq!(date_until.time(), NaiveTime::from_hms_opt(9, 0, 0).unwrap());
         occurrence.kind = "DAILY".into();
         let until =
             chrono::DateTime::parse_from_rfc3339(&snooze_until(&occurrence, now, 10).unwrap())
@@ -826,6 +887,7 @@ mod tests {
                 reminder_time: "10:00:00".into(),
                 secondary_reminder_time: None,
                 monthly_due_day: None,
+                due_date: None,
                 days_before: 5,
                 priority: "NORMAL".into(),
                 is_active: true,
@@ -842,6 +904,47 @@ mod tests {
     }
 
     #[test]
+    fn date_definition_starts_once_on_the_lead_date() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        replace_definitions(
+            &c,
+            &[ReminderDefinition {
+                id: "date-wise".into(),
+                title: "Renew license".into(),
+                description: None,
+                kind: "DATE".into(),
+                reminder_time: "09:00:00".into(),
+                secondary_reminder_time: None,
+                monthly_due_day: None,
+                due_date: Some("2028-10-29".into()),
+                days_before: 5,
+                priority: "HIGH".into(),
+                is_active: true,
+                updated_at: "2028-10-01T00:00:00Z".into(),
+            }],
+        )
+        .unwrap();
+        materialize_local_on(&c, NaiveDate::from_ymd_opt(2028, 10, 23).unwrap()).unwrap();
+        let before_count: i64 = c
+            .query_row("SELECT count(*) FROM occurrences", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before_count, 0);
+
+        materialize_local_on(&c, NaiveDate::from_ymd_opt(2028, 10, 24).unwrap()).unwrap();
+        materialize_local_on(&c, NaiveDate::from_ymd_opt(2028, 10, 25).unwrap()).unwrap();
+        let occurrence = occurrence_for(&c, "date-wise");
+        assert_eq!(occurrence.id, "date-wise:2028-10-29");
+        assert_eq!(occurrence.scheduled_date, "2028-10-24");
+        assert!(occurrence.scheduled_at.starts_with("2028-10-24T09:00:00"));
+        assert!(occurrence.due_at.starts_with("2028-10-29T09:00:00"));
+        let after_count: i64 = c
+            .query_row("SELECT count(*) FROM occurrences", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after_count, 1);
+    }
+
+    #[test]
     fn completed_monthly_reminder_returns_next_month_not_next_day() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
@@ -855,6 +958,7 @@ mod tests {
                 reminder_time: "10:00:00".into(),
                 secondary_reminder_time: None,
                 monthly_due_day: Some(15),
+                due_date: None,
                 days_before: 5,
                 priority: "NORMAL".into(),
                 is_active: true,

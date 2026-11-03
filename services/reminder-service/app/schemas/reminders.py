@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +13,7 @@ class ReminderCreate(BaseModel):
     reminder_time: time
     secondary_reminder_time: time | None = None
     monthly_due_day: int | None = Field(default=None, ge=1, le=31)
+    due_date: date | None = None
     days_before: int = Field(default=5, ge=0, le=31)
     priority: Priority = Priority.NORMAL
 
@@ -20,9 +21,19 @@ class ReminderCreate(BaseModel):
     def validate_rules(self) -> "ReminderCreate":
         if self.type is ReminderType.MONTHLY and self.monthly_due_day is None:
             raise ValueError("monthly_due_day is required for monthly reminders")
-        if self.type is ReminderType.DAILY and self.monthly_due_day is not None:
+        if self.type is not ReminderType.MONTHLY and self.monthly_due_day is not None:
             raise ValueError("monthly_due_day is only valid for monthly reminders")
-        if self.type is ReminderType.MONTHLY and self.secondary_reminder_time is not None:
+        if self.type is ReminderType.DATE and self.due_date is None:
+            raise ValueError("due_date is required for date-wise reminders")
+        if self.type is not ReminderType.DATE and self.due_date is not None:
+            raise ValueError("due_date is only valid for date-wise reminders")
+        if (
+            self.type is ReminderType.DATE
+            and self.due_date is not None
+            and self.due_date < date.today()
+        ):
+            raise ValueError("due_date cannot be in the past")
+        if self.type is not ReminderType.DAILY and self.secondary_reminder_time is not None:
             raise ValueError("secondary_reminder_time is only valid for daily reminders")
         if self.secondary_reminder_time == self.reminder_time:
             raise ValueError("daily reminder times must be different")
@@ -35,6 +46,7 @@ class ReminderUpdate(BaseModel):
     reminder_time: time | None = None
     secondary_reminder_time: time | None = None
     monthly_due_day: int | None = Field(default=None, ge=1, le=31)
+    due_date: date | None = None
     days_before: int | None = Field(default=None, ge=0, le=31)
     priority: Priority | None = None
 
@@ -47,6 +59,7 @@ class ReminderView(BaseModel):
     reminder_time: time
     secondary_reminder_time: time | None
     monthly_due_day: int | None
+    due_date: date | None
     days_before: int
     priority: Priority
     is_active: bool

@@ -90,6 +90,7 @@ async def create_reminder(body: ReminderCreate, request: Request, session: Sessi
         reminder_time=body.reminder_time,
         secondary_reminder_time=body.secondary_reminder_time,
         monthly_due_day=body.monthly_due_day,
+        due_date=body.due_date,
         days_before=body.days_before,
         priority=body.priority,
         is_active=True,
@@ -122,7 +123,9 @@ async def list_reminders(
     count_query = select(func.count()).select_from(query.subquery())
     total = await session.scalar(count_query)
     reminders = list(
-        await session.scalars(query.order_by(Reminder.created_at.desc()).limit(limit).offset(offset))
+        await session.scalars(
+            query.order_by(Reminder.created_at.desc()).limit(limit).offset(offset)
+        )
     )
     return ReminderPage(
         items=[await reminder_view(session, reminder) for reminder in reminders],
@@ -146,14 +149,33 @@ async def update_reminder(
     _ = request
     reminder = await get_reminder(session, reminder_id)
     changes = body.model_dump(exclude_unset=True)
-    if reminder.type is ReminderType.DAILY and changes.get("monthly_due_day") is not None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Daily reminders have no due day")
-    if reminder.type is ReminderType.MONTHLY and changes.get("secondary_reminder_time") is not None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Monthly reminders have no second time")
+    if reminder.type is not ReminderType.MONTHLY and changes.get("monthly_due_day") is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Only monthly reminders have a due day"
+        )
+    if reminder.type is not ReminderType.DATE and changes.get("due_date") is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Only date-wise reminders have an exact date"
+        )
+    if reminder.type is ReminderType.DATE and "due_date" in changes:
+        if changes["due_date"] is None or changes["due_date"] < utc_now().date():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Date-wise reminders need a current or future date",
+            )
+    if (
+        reminder.type is not ReminderType.DAILY
+        and changes.get("secondary_reminder_time") is not None
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Only daily reminders have a second time"
+        )
     primary = changes.get("reminder_time", reminder.reminder_time)
     secondary = changes.get("secondary_reminder_time", reminder.secondary_reminder_time)
     if secondary is not None and secondary == primary:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Daily reminder times must be different")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Daily reminder times must be different"
+        )
     for field, value in changes.items():
         setattr(reminder, field, value)
     add_outbox(session, reminder, "reminder.updated", {"fields": list(changes)})

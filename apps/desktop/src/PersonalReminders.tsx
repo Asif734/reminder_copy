@@ -5,7 +5,7 @@ import type { ReminderDefinition } from "./types";
 
 const emptyReminder = (): ReminderDefinition => ({
   id: "", title: "", description: "", type: "DAILY", reminder_time: "09:00",
-  secondary_reminder_time: null, monthly_due_day: null, days_before: 0,
+  secondary_reminder_time: null, monthly_due_day: null, due_date: null, days_before: 0,
   priority: "NORMAL", is_active: true, updated_at: "",
 });
 
@@ -15,6 +15,8 @@ export function PersonalReminders() {
   const [deleting, setDeleting] = useState<ReminderDefinition | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const minimumDate = new Date();
+  const minimumDateValue = `${minimumDate.getFullYear()}-${String(minimumDate.getMonth() + 1).padStart(2, "0")}-${String(minimumDate.getDate()).padStart(2, "0")}`;
 
   useEffect(() => {
     let active = true;
@@ -55,8 +57,8 @@ export function PersonalReminders() {
     {error && <p role="alert" className="text-red-700 mb-3">{error}</p>}
     {items.length === 0 ? <p className="card p-6 muted text-sm">No personal reminders yet.</p> : <div className="grid gap-3">{items.map((item) => <article key={item.id} className="card p-5 flex justify-between gap-4">
       <div><h3 className="font-bold">{item.title}</h3><p className="muted text-sm mt-1">{item.description}</p>
-        <p className="text-sm mt-2">{item.type === "DAILY" ? "Daily" : `Monthly · day ${item.monthly_due_day}`} · {item.reminder_time.slice(0, 5)}{item.secondary_reminder_time && ` and ${item.secondary_reminder_time.slice(0, 5)}`} · {item.priority.toLowerCase()} priority{!item.is_active && " · Paused"}</p>
-        {item.type === "MONTHLY" && <p className="muted text-xs mt-1">Starts {item.days_before} days before due date · Remind me later: next day</p>}
+        <p className="text-sm mt-2">{item.type === "DAILY" ? "Daily" : item.type === "MONTHLY" ? `Monthly · day ${item.monthly_due_day}` : `Date-wise · ${item.due_date}`} · {item.reminder_time.slice(0, 5)}{item.secondary_reminder_time && ` and ${item.secondary_reminder_time.slice(0, 5)}`} · {item.priority.toLowerCase()} priority{!item.is_active && " · Paused"}</p>
+        {item.type !== "DAILY" && <p className="muted text-xs mt-1">Starts {item.days_before} days before due date · Remind me later: next day</p>}
       </div>
       <div className="flex gap-2 items-start"><button className="btn secondary" aria-label={`Edit ${item.title}`} onClick={() => { setError(""); setDraft({ ...item }); }}>Edit</button><button className="btn secondary" aria-label={`Delete ${item.title}`} onClick={() => { setError(""); setDeleting(item); }}>Delete</button></div>
     </article>)}</div>}
@@ -65,13 +67,12 @@ export function PersonalReminders() {
       <p className="muted text-sm">Saved on this computer. All times use this computer’s local timezone.</p>
       <label className="block text-sm">Title<input className="field mt-1" autoFocus required maxLength={200} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
       <label className="block text-sm">Description<textarea className="field mt-1" maxLength={5000} value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
-      <label className="block text-sm">Repeat<select className="field mt-1" value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value as ReminderDefinition["type"], monthly_due_day: e.target.value === "MONTHLY" ? 1 : null, secondary_reminder_time: null })}><option value="DAILY">Daily</option><option value="MONTHLY">Monthly</option></select></label>
+      <label className="block text-sm">Schedule<select className="field mt-1" value={draft.type} onChange={(e) => { const type = e.target.value as ReminderDefinition["type"]; setDraft({ ...draft, type, monthly_due_day: type === "MONTHLY" ? 1 : null, due_date: type === "DATE" ? minimumDateValue : null, secondary_reminder_time: null, days_before: type === "DAILY" ? 0 : 5 }); }}><option value="DAILY">Daily</option><option value="MONTHLY">Monthly</option><option value="DATE">Date-wise</option></select></label>
       <label className="block text-sm">Reminder time<input className="field mt-1" type="time" required value={draft.reminder_time.slice(0, 5)} onChange={(e) => setDraft({ ...draft, reminder_time: e.target.value })} /></label>
-      {draft.type === "DAILY" ? <label className="block text-sm">Second reminder time (optional)<input className="field mt-1" type="time" value={draft.secondary_reminder_time?.slice(0, 5) ?? ""} onChange={(e) => setDraft({ ...draft, secondary_reminder_time: e.target.value || null })} /></label> : <>
-        <label className="block text-sm">Day of month<input className="field mt-1" type="number" min={1} max={31} required value={draft.monthly_due_day ?? 1} onChange={(e) => setDraft({ ...draft, monthly_due_day: Number(e.target.value) })} /></label>
-        <p className="muted text-xs">Shorter months use the last day of the month.</p>
-        <label className="block text-sm">Start reminding days before due date<input className="field mt-1" type="number" min={0} max={31} required value={draft.days_before} onChange={(e) => setDraft({ ...draft, days_before: Number(e.target.value) })} /></label>
-      </>}
+      {draft.type === "DAILY" && <label className="block text-sm">Second reminder time (optional)<input className="field mt-1" type="time" value={draft.secondary_reminder_time?.slice(0, 5) ?? ""} onChange={(e) => setDraft({ ...draft, secondary_reminder_time: e.target.value || null })} /></label>}
+      {draft.type === "MONTHLY" && <><label className="block text-sm">Day of month<input className="field mt-1" type="number" min={1} max={31} required value={draft.monthly_due_day ?? 1} onChange={(e) => setDraft({ ...draft, monthly_due_day: Number(e.target.value) })} /></label><p className="muted text-xs">Shorter months use the last day of the month.</p></>}
+      {draft.type === "DATE" && <label className="block text-sm">Due date<input className="field mt-1" type="date" min={minimumDateValue} required value={draft.due_date ?? ""} onChange={(e) => setDraft({ ...draft, due_date: e.target.value || null })} /></label>}
+      {draft.type !== "DAILY" && <label className="block text-sm">Start reminding days before due date<input className="field mt-1" type="number" min={0} max={31} required value={draft.days_before} onChange={(e) => setDraft({ ...draft, days_before: Number(e.target.value) })} /></label>}
       <label className="block text-sm">Priority<select className="field mt-1" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value as ReminderDefinition["priority"] })}><option value="LOW">Low</option><option value="NORMAL">Normal</option><option value="HIGH">High</option></select></label>
       <label className="flex gap-2 text-sm"><input type="checkbox" checked={draft.is_active} onChange={(e) => setDraft({ ...draft, is_active: e.target.checked })} />Active</label>
       {draft.id && <p className="muted text-xs">Saving replaces pending reminders with the new schedule and keeps completed history.</p>}

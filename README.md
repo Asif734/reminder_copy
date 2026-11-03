@@ -23,10 +23,10 @@ Development diagnostic ports are `8003` (reminders), `5432` (PostgreSQL), and `6
 Client applications should use only the gateway on
 port `8000`. Swagger is available at `http://localhost:8000/docs` outside production.
 
-Public reminder management is available at `/api/v1/reminders`. Daily and monthly definitions
+Public reminder management is available at `/api/v1/reminders`. Daily, monthly, and exact-date definitions
 apply to all installations. There are no accounts, member assignments, or login tokens. Each
 desktop stores definitions in SQLite and keeps its own completion and snooze state.
-Users can also create, edit, pause, and delete personal daily/monthly reminders entirely
+Users can also create, edit, pause, and delete personal daily/monthly/date-wise reminders entirely
 offline in the desktop app. These remain private to that computer and survive server updates.
 Monthly **Remind me later** postpones until tomorrow at the scheduled local time; daily
 reminders snooze for 10 minutes.

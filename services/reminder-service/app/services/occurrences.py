@@ -25,16 +25,33 @@ def occurrence_window(
     if reminder.type is ReminderType.DAILY:
         instant = local_instant(local_today, reminder.reminder_time, assignment.timezone)
         return local_today.isoformat(), instant, instant
+    if reminder.type is ReminderType.DATE:
+        if reminder.due_date is None:
+            return None
+        start_day = reminder.due_date - timedelta(days=reminder.days_before)
+        if local_today < start_day:
+            return None
+        return (
+            reminder.due_date.isoformat(),
+            local_instant(start_day, reminder.reminder_time, assignment.timezone),
+            local_instant(reminder.due_date, reminder.reminder_time, assignment.timezone),
+        )
     due_day = monthly_due_date(local_today.year, local_today.month, reminder.monthly_due_day or 1)
     start_day = due_day - timedelta(days=reminder.days_before)
     if local_today < start_day:
         return None
     due_at = local_instant(due_day, reminder.reminder_time, assignment.timezone)
     scheduled_day = min(max(local_today, start_day), due_day)
-    return due_day.strftime("%Y-%m"), local_instant(scheduled_day, reminder.reminder_time, assignment.timezone), due_at
+    return (
+        due_day.strftime("%Y-%m"),
+        local_instant(scheduled_day, reminder.reminder_time, assignment.timezone),
+        due_at,
+    )
 
 
-def occurrence_windows(reminder: Reminder, assignment: Assignment, local_today: date) -> list[tuple[str, datetime, datetime]]:
+def occurrence_windows(
+    reminder: Reminder, assignment: Assignment, local_today: date
+) -> list[tuple[str, datetime, datetime]]:
     primary = occurrence_window(reminder, assignment, local_today)
     if primary is None:
         return []
@@ -56,7 +73,9 @@ async def materialize(session: AsyncSession, now: datetime) -> int:
     created = 0
     for reminder, assignment in rows:
         local_today = now.astimezone(ZoneInfo(assignment.timezone)).date()
-        for cycle_key, scheduled_at, due_at in occurrence_windows(reminder, assignment, local_today):
+        for cycle_key, scheduled_at, due_at in occurrence_windows(
+            reminder, assignment, local_today
+        ):
             existing = await session.scalar(
                 select(Occurrence.id).where(
                     Occurrence.assignment_id == assignment.id, Occurrence.cycle_key == cycle_key
@@ -102,10 +121,8 @@ async def update_due_states(session: AsyncSession, now: datetime) -> int:
             changed += 1
         if occurrence.due_at < now:
             reminder = await session.get(Reminder, occurrence.reminder_id)
-            if reminder and reminder.type is ReminderType.MONTHLY:
+            if reminder and reminder.type in (ReminderType.MONTHLY, ReminderType.DATE):
                 occurrence.status = OccurrenceStatus.OVERDUE
-                occurrence.next_notification_at = max(
-                    occurrence.next_notification_at or now, now
-                )
+                occurrence.next_notification_at = max(occurrence.next_notification_at or now, now)
                 changed += 1
     return changed

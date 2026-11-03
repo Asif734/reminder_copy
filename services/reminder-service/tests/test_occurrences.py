@@ -5,13 +5,19 @@ from app.models.reminder import Assignment, Reminder, ReminderType
 from app.services.occurrences import occurrence_window, occurrence_windows
 
 
-def reminder(reminder_type: ReminderType, due_day: int | None = None, days_before: int = 5) -> Reminder:
+def reminder(
+    reminder_type: ReminderType,
+    due_day: int | None = None,
+    days_before: int = 5,
+    due_date: date | None = None,
+) -> Reminder:
     return Reminder(
         id=uuid4(),
         title="Test",
         type=reminder_type,
         reminder_time=time(10),
         monthly_due_day=due_day,
+        due_date=due_date,
         days_before=days_before,
         created_by=uuid4(),
     )
@@ -19,12 +25,18 @@ def reminder(reminder_type: ReminderType, due_day: int | None = None, days_befor
 
 def assignment(timezone: str = "UTC") -> Assignment:
     return Assignment(
-        id=uuid4(), reminder_id=uuid4(), user_id=uuid4(), timezone=timezone, created_at=datetime.now(UTC)
+        id=uuid4(),
+        reminder_id=uuid4(),
+        user_id=uuid4(),
+        timezone=timezone,
+        created_at=datetime.now(UTC),
     )
 
 
 def test_daily_cycle_is_local_date() -> None:
-    result = occurrence_window(reminder(ReminderType.DAILY), assignment("Asia/Dhaka"), date(2026, 8, 12))
+    result = occurrence_window(
+        reminder(ReminderType.DAILY), assignment("Asia/Dhaka"), date(2026, 8, 12)
+    )
     assert result is not None
     cycle, scheduled, due = result
     assert cycle == "2026-08-12"
@@ -56,3 +68,17 @@ def test_monthly_cycle_clamps_february_due_date() -> None:
     )
     assert result is not None
     assert result[2] == datetime(2024, 2, 29, 10, tzinfo=UTC)
+
+
+def test_date_wise_cycle_starts_exactly_five_days_before() -> None:
+    item = reminder(
+        ReminderType.DATE,
+        days_before=5,
+        due_date=date(2028, 10, 29),
+    )
+    assert occurrence_window(item, assignment(), date(2028, 10, 23)) is None
+    result = occurrence_window(item, assignment(), date(2028, 10, 24))
+    assert result is not None
+    assert result[0] == "2028-10-29"
+    assert result[1] == datetime(2028, 10, 24, 10, tzinfo=UTC)
+    assert result[2] == datetime(2028, 10, 29, 10, tzinfo=UTC)

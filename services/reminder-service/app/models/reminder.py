@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from enum import StrEnum
 from uuid import UUID
 
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 class ReminderType(StrEnum):
     DAILY = "DAILY"
     MONTHLY = "MONTHLY"
+    DATE = "DATE"
 
 
 class Priority(StrEnum):
@@ -47,6 +48,7 @@ class Reminder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     reminder_time: Mapped[time] = mapped_column(Time, nullable=False)
     secondary_reminder_time: Mapped[time | None] = mapped_column(Time)
     monthly_due_day: Mapped[int | None] = mapped_column(Integer)
+    due_date: Mapped[date | None] = mapped_column()
     days_before: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     priority: Mapped[Priority] = mapped_column(
         Enum(Priority, schema="reminders"), default=Priority.NORMAL, nullable=False

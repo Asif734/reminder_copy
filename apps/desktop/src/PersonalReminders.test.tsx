@@ -9,7 +9,7 @@ vi.mock("./native", () => ({ native: { personal: vi.fn(), savePersonal: vi.fn(),
 const monthly: ReminderDefinition = {
   id: "local:test", title: "Pay rent", description: null, type: "MONTHLY",
   reminder_time: "09:00:00", secondary_reminder_time: null, monthly_due_day: 15,
-  days_before: 5, priority: "NORMAL", is_active: true, updated_at: "",
+  due_date: null, days_before: 5, priority: "NORMAL", is_active: true, updated_at: "",
 };
 afterEach(cleanup);
 beforeEach(() => {
@@ -22,10 +22,20 @@ it("creates monthly reminders through local commands", async () => {
   render(<PersonalReminders />);
   fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Pay rent" } });
-  fireEvent.change(screen.getByLabelText("Repeat"), { target: { value: "MONTHLY" } });
+  fireEvent.change(screen.getByLabelText("Schedule"), { target: { value: "MONTHLY" } });
   fireEvent.change(screen.getByLabelText("Day of month"), { target: { value: "15" } });
   fireEvent.click(screen.getByRole("button", { name: "Save reminder" }));
   await waitFor(() => expect(native.savePersonal).toHaveBeenCalledWith(expect.objectContaining({ title: "Pay rent", type: "MONTHLY", monthly_due_day: 15 }), true));
+});
+it("creates an exact date-wise reminder locally", async () => {
+  render(<PersonalReminders />);
+  fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renew license" } });
+  fireEvent.change(screen.getByLabelText("Schedule"), { target: { value: "DATE" } });
+  fireEvent.change(screen.getByLabelText("Due date"), { target: { value: "2028-10-29" } });
+  fireEvent.change(screen.getByLabelText("Start reminding days before due date"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save reminder" }));
+  await waitFor(() => expect(native.savePersonal).toHaveBeenCalledWith(expect.objectContaining({ type: "DATE", due_date: "2028-10-29", days_before: 5 }), true));
 });
 it("edits and pauses an existing reminder", async () => {
   vi.mocked(native.personal).mockResolvedValue([monthly]);

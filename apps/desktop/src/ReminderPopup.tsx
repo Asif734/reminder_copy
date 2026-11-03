@@ -80,7 +80,7 @@ export function ReminderPopup() {
         <div className="popup-actions">
           <button disabled={busy} className="btn popup-later" onClick={() => act("later")}>
             <Clock3 size={20} /> Remind me later
-            <small>{current.occurrence.type === "MONTHLY" ? "Tomorrow at the scheduled time" : "10 minutes"}</small>
+            <small>{current.occurrence.type === "DAILY" ? "10 minutes" : "Tomorrow at the scheduled time"}</small>
           </button>
           <button disabled={busy} className="btn popup-done" onClick={() => act("complete")}>
             <Check size={21} /> Completed

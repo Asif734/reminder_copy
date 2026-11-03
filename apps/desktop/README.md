@@ -39,7 +39,7 @@ Apple signing identity for distributable builds.
 ## Personal offline reminders
 
 Use **My reminders → Add reminder** to create a daily or monthly reminder without
-connecting to a server. Personal reminders can be edited, paused, resumed, and
+connecting to a server. Personal daily, monthly, and date-wise reminders can be edited, paused, resumed, and
 deleted on the same computer. They live in SQLite and survive app restarts and
 server updates; they are never uploaded or distributed to other installations.
 Downloaded global reminders remain managed through the admin dashboard.
@@ -48,6 +48,10 @@ Daily reminders support an optional second time. Monthly reminders support a due
 day (clamped to the last day in shorter months) and a lead time in days. Editing a
 personal reminder replaces its pending occurrences and keeps completed history.
 Deleting it removes its local history as well.
+
+Date-wise reminders use one exact due date and a configurable lead time. Their first
+notification is scheduled for the due date minus that lead time. Snoozing postpones
+the occurrence until the same local time on the following calendar day.
 
 **Remind me later** postpones monthly reminders until tomorrow at their originally
 scheduled local time, including across month/year boundaries. Daily reminders
